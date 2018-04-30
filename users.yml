@@ -1,5 +1,4 @@
 ---
-
 - hosts: localhost
   gather_facts: False
   tags: always
@@ -8,22 +7,50 @@
 
   tasks:
     - block:
+        - pause:
+            prompt: "Enter the IP address of your server: (or use localhost for local installation)"
+          register: _server
+          when: server is undefined
+
+        - name: Set facts based on the input
+          set_fact:
+            algo_server_ip: >-
+              {% if server is defined %}{{ server }}
+              {%- elif _server.user_input is defined and _server.user_input != "" %}{{ _server.user_input }}
+              {%- else %}omit{% endif %}
+
+        - name: Import host specific variables
+          include_vars:
+            file: "configs/{{ algo_server_ip }}/config.yml"
+
+        - pause:
+            prompt: Enter the password for the private CA key
+            echo: false
+          register: _ca_password
+          when: ca_password is undefined
+
+        - name: Set facts based on the input
+          set_fact:
+            algo_ca_password: >-
+              {% if ca_password is defined %}{{ ca_password }}
+              {%- elif _ca_password.user_input is defined and _ca_password.user_input != "" %}{{ _ca_password.user_input }}
+              {%- else %}omit{% endif %}
+
         - name: Add the server to the vpn-host group
           add_host:
-            hostname: "{{ server_ip }}"
+            hostname: "{{ algo_server_ip }}"
             groupname: vpn-host
-            ansible_ssh_user: "{{ server_user }}"
+            ansible_ssh_user: "{{ server_user|default('root') }}"
             ansible_python_interpreter: "/usr/bin/python2.7"
-            ssh_tunneling_enabled: "{{ ssh_tunneling_enabled }}"
-            easyrsa_CA_password: "{{ easyrsa_CA_password }}"
-            IP_subject: "{{ IP_subject_alt_name }}"
-            ansible_ssh_private_key_file: "{{ SSH_keys.private }}"
+            algo_server_ip: "{{ algo_server_ip }}"
+            easyrsa_CA_password: "{{ algo_ca_password }}"
+            ansible_ssh_private_key_file: "{{ ansible_ssh_private_key_file }}"
 
         - name: Wait until SSH becomes ready...
           local_action:
             module: wait_for
             port: 22
-            host: "{{ server_ip }}"
+            host: "{{ algo_server_ip }}"
             search_regex: "OpenSSH"
             delay: 10
             timeout: 320
@@ -41,21 +68,14 @@
   become: true
   vars_files:
     - config.cfg
-
-  pre_tasks:
-    - block:
-        - name: Common pre-tasks
-          include_tasks: playbooks/common.yml
-          tags: always
-      rescue:
-        - debug: var=fail_hint
-          tags: always
-        - fail:
-          tags: always
+    - "configs/{{ algo_server_ip }}/config.yml"
 
   roles:
-    - { role: ssh_tunneling, tags: always, when: ssh_tunneling_enabled is defined and ssh_tunneling_enabled == "y" }
-    - { role: vpn }
+    - role: ssh_tunneling
+      when: algo_ssh_tunneling
+      tags: ssh_tunneling
+    - role: vpn
+      tags: vpn
 
   post_tasks:
     - block:
